@@ -187,7 +187,7 @@ if __name__ == "__main__":
             if augment_flag[i] is True and rnd % enhance_interval == 0:
                 aggregated_fn = aggregate_from_window(sliding_fn_window[i], top_percent=top_fp_fn_percent)
                 aggregated_fp = aggregate_from_window(sliding_fp_window[i], top_percent=top_fp_fn_percent)
-                # client.inject_hard_negatives(aggregated_fp, cluster_labels[i], max_per_pair=300)
+
 
                 j = 1 - i
                 pos_edge_list = extract_augmented_positive_edges(
@@ -214,7 +214,6 @@ if __name__ == "__main__":
 
             if augment_flag[i] is True and rnd % enhance_interval == 0:
                 print("Negative Augmentation Implementing.")
-                # client.train_on_hard_negatives()
                 client.train_on_augmented_negatives()
                 fn_fp_ignore_flags[i] = True
             if augment_flag[i] is True and rnd % enhance_interval == enhance_interval/2:
