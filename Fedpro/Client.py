@@ -6,7 +6,7 @@ import random
 
 class Client:
     def __init__(self, client_id, data, encoder, decoder, device='cpu', lr=0.005,
-                 weight_decay=1e-4, max_grad_norm=3.0):
+                 weight_decay=1e-4, max_grad_norm=30000.0):
         self.client_id = client_id
         self.data = data.to(device)
         self.device = device
