@@ -154,6 +154,7 @@ if __name__ == "__main__":
     best_f1 = -1
     best_encoder_state = None
     best_decoder_states = None
+    best_weight_state = None
 
     # 初始化滑动窗口
     sliding_fn_window = [deque(maxlen=5) for _ in range(len(clients))]
@@ -228,10 +229,13 @@ if __name__ == "__main__":
 
         encoder_states = [client.get_encoder_state() for client in clients]
         decoder_states = [client.get_decoder_state() for client in clients]
+        weight_states = [client.get_loss_weight_state() for client in clients]
         global_encoder_state = average_state_dicts(encoder_states)
+        global_weight_state = average_state_dicts(weight_states)
 
         for client in clients:
             client.set_encoder_state(global_encoder_state)
+            client.set_loss_weight_state(global_weight_state)
 
         avg_acc, avg_recall, avg_prec, avg_f1 = evaluate_all_clients(clients, cluster_labels, use_test=False)
 
@@ -239,11 +243,13 @@ if __name__ == "__main__":
             best_f1 = avg_f1
             best_encoder_state = global_encoder_state
             best_decoder_states = decoder_states
+            best_weight_state = global_weight_state
             print("===> New best model saved")
 
     print("\n================ Federated Training Finished ================")
     for i, client in enumerate(clients):
         client.set_encoder_state(best_encoder_state)
+        client.set_loss_weight_state(best_weight_state)
         client.set_decoder_state(best_decoder_states[i])
 
     print("\n================ Final Evaluation ================")

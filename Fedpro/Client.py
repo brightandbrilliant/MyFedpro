@@ -285,3 +285,13 @@ class Client:
 
     def set_decoder_state(self, state_dict):
         self.decoder.load_state_dict(state_dict)
+
+    def get_loss_weight_state(self):
+        return {
+            'pos_loss_weight': self.pos_loss_weight,
+            'neg_loss_weight': self.neg_loss_weight
+        }
+
+    def set_loss_weight_state(self, state_dict):
+        self.pos_loss_weight.data.copy_(state_dict['pos_loss_weight'].data)
+        self.neg_loss_weight.data.copy_(state_dict['neg_loss_weight'].data)
