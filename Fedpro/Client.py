@@ -101,7 +101,7 @@ class Client:
         loss_aug = self.criterion(pos_pred_aug.squeeze(), labels_aug)
 
         # 动态调整权重
-        current_weight = torch.sigmoid(self.pos_loss_weight)
+        current_weight = torch.sigmoid(self.pos_loss_weight)/3
         loss = (1 - current_weight) * loss_ori + current_weight * loss_aug
 
         loss.backward()
@@ -152,7 +152,7 @@ class Client:
         loss_aug = self.criterion(neg_pred_aug.squeeze(), labels_aug)
 
         # 动态调整权重
-        current_weight = torch.sigmoid(self.neg_loss_weight)
+        current_weight = torch.sigmoid(self.neg_loss_weight)/3
         loss = (1 - current_weight) * loss_ori + current_weight * loss_aug
 
         loss.backward()

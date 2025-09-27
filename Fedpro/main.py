@@ -2,7 +2,7 @@ import os
 import torch
 from collections import deque, defaultdict
 from Client import Client
-from Model.GCN import GCN
+import random
 from Model.GraphSage import GraphSAGE
 from Model.ResMLP import ResMLP
 from torch_geometric.transforms import RandomLinkSplit
@@ -17,7 +17,6 @@ from Parse_Anchors import read_anchors, parse_anchors
 from Utils import (build_positive_edge_dict,
                    build_edge_type_alignment, judge_loss_window,
                    draw_loss_plot)
-
 
 
 def split_client_data(data, val_ratio=0.1, test_ratio=0.1, device='cpu'):
@@ -40,7 +39,6 @@ def split_client_data(data, val_ratio=0.1, test_ratio=0.1, device='cpu'):
     train_data.test_neg_edge_index = test_data.edge_label_index[:, ~test_mask]
 
     return train_data
-
 
 
 def load_all_clients(pyg_data_paths, encoder_params, decoder_params, training_params, device, nClusters=10, enhance_interval=5):
@@ -74,7 +72,6 @@ def load_all_clients(pyg_data_paths, encoder_params, decoder_params, training_pa
     return clients, all_cluster_labels, raw_data_list, edge_dicts
 
 
-
 def average_state_dicts(state_dicts):
     avg_state = {}
     for key in state_dicts[0].keys():
@@ -82,15 +79,71 @@ def average_state_dicts(state_dicts):
     return avg_state
 
 
-
-def extract_augmented_positive_edges(target_fp_types, edge_dict, edge_alignment, top_k=100):
+def extract_augmented_pos_edges(target_fn_types, edge_dict, edge_alignment, top_k=100):
     selected_edges = []
-    for (c1, c2) in target_fp_types:
+    for (c1, c2) in target_fn_types:
         aligned_targets = edge_alignment.get((c1, c2), [])
         for (c1_p, c2_p), weight in aligned_targets:
             candidate_edges = edge_dict.get((c1_p, c2_p), [])
             selected_edges.extend(candidate_edges[:top_k])
     return selected_edges
+
+
+def construct_augmented_neg_edges(aggregated_fp, alignment, cluster_labels_j, pos_edges_j, top_k=100):
+    """
+    基于类型对齐和负属性保证，构造增强负边列表，并确保无重复。
+
+    Args:
+        aggregated_fp (dict): 客户端 i 的困难假正边类型 (c1, c2) -> 计数。
+        alignment (dict): 客户端 i 到客户端 j 的边类型对齐关系。
+        cluster_labels_j (torch.Tensor): 客户端 j 的节点聚类标签。
+        pos_edges_j (set): 客户端 j 的所有正边集合 (用于排除，保证负属性)。
+        top_k (int): 每种对齐类型目标采样的最大边数。 <--- 已修正参数名
+
+    Returns:
+        list: 增强负边 [(u, v), ...] 列表。
+    """
+    neg_edge_list = []
+    # 用于存储和查重已采样的负边集合
+    sampled_neg_edges = set()
+    MAX_ATTEMPTS = 500
+
+    for (c1_i, c2_i) in aggregated_fp:
+        aligned_targets = alignment.get((c1_i, c2_i), [])
+
+        for (c1_j, c2_j), weight in aligned_targets:
+            nodes_c1 = (cluster_labels_j == c1_j).nonzero(as_tuple=True)[0].tolist()
+            nodes_c2 = (cluster_labels_j == c2_j).nonzero(as_tuple=True)[0].tolist()
+
+            if not nodes_c1 or not nodes_c2:
+                continue
+
+            sampled_count = 0
+            attempts = 0
+
+            # 注意：这里使用修正后的参数名 top_k
+            target_samples = int(top_k * weight) if len(aligned_targets) > 1 else top_k
+
+            while sampled_count < target_samples and attempts < MAX_ATTEMPTS:
+                u = random.choice(nodes_c1)
+                v = random.choice(nodes_c2)
+
+                edge_tuple = (int(u), int(v))  # 有向边元组
+
+                # 检查条件：
+                # 1. u != v
+                # 2. edge_tuple 不在客户端 j 的正边集合中（排除正边，只检查当前方向）
+                # 3. edge_tuple 不在本次已采样的集合中（排除重复）
+                if (u != v and
+                        edge_tuple not in pos_edges_j and  # <--- 修正：不再检查 (v, u)
+                        edge_tuple not in sampled_neg_edges):
+                    neg_edge_list.append(edge_tuple)
+                    sampled_neg_edges.add(edge_tuple)
+                    sampled_count += 1
+
+                attempts += 1
+
+    return neg_edge_list
 
 
 
@@ -105,7 +158,6 @@ def evaluate_all_clients(clients, cluster_labels, use_test=False):
     return avg
 
 
-
 def aggregate_from_window(sliding_window, top_percent=0.3):
     aggregate = defaultdict(int)
     for it in sliding_window:
@@ -117,8 +169,8 @@ def aggregate_from_window(sliding_window, top_percent=0.3):
 
 
 if __name__ == "__main__":
-    data_dir = "../Parsed_dataset/wd"
-    anchor_path = "../dataset/wd/anchors.txt"
+    data_dir = "../Parsed_dataset/dblp"
+    anchor_path = "../dataset/dblp/anchors.txt"
     pyg_data_files = sorted([os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith(".pt")])
 
     encoder_params = {
@@ -131,16 +183,20 @@ if __name__ == "__main__":
     decoder_params = {'hidden_dim': 128, 'num_layers': 8, 'dropout': 0.3}
     training_params = {'lr': 0.001, 'weight_decay': 1e-4, 'local_epochs': 5}
 
-    num_rounds = 1200
+    num_rounds = 800
     top_fp_fn_percent = 0.3
-    enhance_interval = 30
+    enhance_interval = 20
     top_k_per_type = 100
-    nClusters = 8
+    nClusters = 10
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     clients, cluster_labels, raw_data_list, edge_dicts = load_all_clients(
         pyg_data_files, encoder_params, decoder_params, training_params, device, nClusters, enhance_interval
     )
+
+    client_pos_edges = [
+        set(map(tuple, clients[k].data.edge_index.t().tolist())) for k in range(len(clients))
+    ]
 
     anchor_raw = read_anchors(anchor_path)
     anchor_pairs = parse_anchors(anchor_raw, point=9714)
@@ -191,16 +247,18 @@ if __name__ == "__main__":
 
 
                 j = 1 - i
-                pos_edge_list = extract_augmented_positive_edges(
+                pos_edge_list = extract_augmented_pos_edges(
                     aggregated_fn,
                     edge_dicts[j],
                     edge_alignment1 if i == 0 else edge_alignment2,
                     top_k=top_k_per_type
                 )
-                neg_edge_list = extract_augmented_positive_edges(
+
+                neg_edge_list = construct_augmented_neg_edges(
                     aggregated_fp,
-                    edge_dicts[j],
-                    edge_alignment1 if i == 0 else edge_alignment2,
+                    edge_alignment1 if i == 0 else edge_alignment2,           # 客户端 i 到 j 的对齐矩阵
+                    cluster_labels[j],   # 客户端 j 的聚类标签
+                    client_pos_edges[j], # 客户端 j 的正边集合 (用于排除)
                     top_k=top_k_per_type
                 )
 
@@ -225,7 +283,7 @@ if __name__ == "__main__":
             loss_avg /= training_params['local_epochs']
             sliding_loss_window[i].append(loss_avg)
             loss_record[i].append(loss_avg)
-            # print(f'Client{i} loss: {loss_avg}')
+            print(f'Client{i} loss: {loss_avg}')
 
         encoder_states = [client.get_encoder_state() for client in clients]
         decoder_states = [client.get_decoder_state() for client in clients]
@@ -254,7 +312,6 @@ if __name__ == "__main__":
 
     print("\n================ Final Evaluation ================")
     evaluate_all_clients(clients, cluster_labels, use_test=True)
-    # print(f"Augmentation Start: Client1: {rnds[0]}; Client2: {rnds[1]}")
-    draw_loss_plot(loss_record[0])
-    draw_loss_plot(loss_record[1])
+    # draw_loss_plot(loss_record[0])
+    # draw_loss_plot(loss_record[1])
 
