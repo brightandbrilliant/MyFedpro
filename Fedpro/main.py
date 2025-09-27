@@ -112,8 +112,8 @@ def construct_augmented_neg_edges(aggregated_fp, alignment, cluster_labels_j, po
         aligned_targets = alignment.get((c1_i, c2_i), [])
 
         for (c1_j, c2_j), weight in aligned_targets:
-            nodes_c1 = (cluster_labels_j == c1_j).nonzero(as_tuple=True)[0].tolist()
-            nodes_c2 = (cluster_labels_j == c2_j).nonzero(as_tuple=True)[0].tolist()
+            nodes_c1 = (cluster_labels_j == c1_j).nonzero()[0].tolist()
+            nodes_c2 = (cluster_labels_j == c2_j).nonzero()[0].tolist()
 
             if not nodes_c1 or not nodes_c2:
                 continue
@@ -199,7 +199,7 @@ if __name__ == "__main__":
     ]
 
     anchor_raw = read_anchors(anchor_path)
-    anchor_pairs = parse_anchors(anchor_raw, point=9714)
+    anchor_pairs = parse_anchors(anchor_raw, point=9086)
     results = compute_anchor_feature_differences(raw_data_list[0], raw_data_list[1], anchor_pairs)
     co_matrix = build_cluster_cooccurrence_matrix(cluster_labels[0], cluster_labels[1], results, nClusters, top_percent=0.75)
     alignment1 = extract_clear_alignments(co_matrix, min_ratio=0.25, min_count=30, mode=1)
@@ -210,7 +210,6 @@ if __name__ == "__main__":
     best_f1 = -1
     best_encoder_state = None
     best_decoder_states = None
-    best_weight_state = None
 
     # 初始化滑动窗口
     sliding_fn_window = [deque(maxlen=5) for _ in range(len(clients))]
@@ -219,7 +218,7 @@ if __name__ == "__main__":
     loss_record = [[],[]]
     augment_flag = [False, False]
     rnds = [-1, -1]
-    last_diff = [10000,10000] # 设一个很大的值
+    last_diff = [10000, 10000] # 设一个很大的值
     fn_fp_ignore_flags = [False, False]
 
     print("\n================ Federated Training Start ================")
@@ -244,7 +243,6 @@ if __name__ == "__main__":
             if augment_flag[i] is True and rnd % enhance_interval == 0:
                 aggregated_fn = aggregate_from_window(sliding_fn_window[i], top_percent=top_fp_fn_percent)
                 aggregated_fp = aggregate_from_window(sliding_fp_window[i], top_percent=top_fp_fn_percent)
-
 
                 j = 1 - i
                 pos_edge_list = extract_augmented_pos_edges(
@@ -272,11 +270,11 @@ if __name__ == "__main__":
                 loss_avg += loss
 
             if augment_flag[i] is True and rnd % enhance_interval == 0:
-                print("Negative Augmentation Implementing.")
+                # print("Negative Augmentation Implementing.")
                 client.train_on_augmented_negatives()
                 fn_fp_ignore_flags[i] = True
-            if augment_flag[i] is True and rnd % enhance_interval == enhance_interval/2:
-                print("Positive Augmentation Implementing.")
+            if augment_flag[i] is True and rnd % enhance_interval == enhance_interval//2:
+                # print("Positive Augmentation Implementing.")
                 client.train_on_augmented_positives()
                 fn_fp_ignore_flags[i] = True
 
@@ -287,13 +285,10 @@ if __name__ == "__main__":
 
         encoder_states = [client.get_encoder_state() for client in clients]
         decoder_states = [client.get_decoder_state() for client in clients]
-        weight_states = [client.get_loss_weight_state() for client in clients]
         global_encoder_state = average_state_dicts(encoder_states)
-        global_weight_state = average_state_dicts(weight_states)
 
         for client in clients:
             client.set_encoder_state(global_encoder_state)
-            client.set_loss_weight_state(global_weight_state)
 
         avg_acc, avg_recall, avg_prec, avg_f1 = evaluate_all_clients(clients, cluster_labels, use_test=False)
 
@@ -301,13 +296,11 @@ if __name__ == "__main__":
             best_f1 = avg_f1
             best_encoder_state = global_encoder_state
             best_decoder_states = decoder_states
-            best_weight_state = global_weight_state
             print("===> New best model saved")
 
     print("\n================ Federated Training Finished ================")
     for i, client in enumerate(clients):
         client.set_encoder_state(best_encoder_state)
-        client.set_loss_weight_state(best_weight_state)
         client.set_decoder_state(best_decoder_states[i])
 
     print("\n================ Final Evaluation ================")

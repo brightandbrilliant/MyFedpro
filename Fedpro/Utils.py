@@ -54,6 +54,7 @@ def judge_loss_window(loss_window: deque, last_diff: float):
         return True, now_diff
     return False, now_diff
 
+
 def draw_loss_plot(loss_record: list):
     x = []
     for i in range(1, len(loss_record)+1):

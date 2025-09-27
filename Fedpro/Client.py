@@ -6,21 +6,21 @@ import random
 
 class Client:
     def __init__(self, client_id, data, encoder, decoder, device='cpu', lr=0.005,
-                 weight_decay=1e-4, max_grad_norm=30000.0):
+                 weight_decay=1e-4, max_grad_norm=30000.0,
+                 # 引入手动设定的增强损失权重
+                 augment_weight=0.1):
         self.client_id = client_id
         self.data = data.to(device)
         self.device = device
         self.encoder = encoder.to(device)
         self.decoder = decoder.to(device)
 
-        # 将 loss_weight 改为可训练参数，并用随机值初始化
-        self.pos_loss_weight = torch.nn.Parameter(torch.rand(1, device=device))
-        self.neg_loss_weight = torch.nn.Parameter(torch.rand(1, device=device))
+        # 移除 loss_weight 作为可训练参数
+        self.augment_weight = augment_weight  # <--- 手动设定的增强权重
 
         self.optimizer = torch.optim.Adam(
             list(self.encoder.parameters()) +
-            list(self.decoder.parameters()) +
-            [self.pos_loss_weight, self.neg_loss_weight],  # 将新参数添加到优化器中
+            list(self.decoder.parameters()),
             lr=lr,
             weight_decay=weight_decay
         )
@@ -29,6 +29,7 @@ class Client:
         self.augmented_pos_embeddings = None
         self.augmented_neg_embeddings = None
         self.max_grad_norm = max_grad_norm
+        self.soft_classify = 1.0
 
     def train(self):
         """常规训练：只使用原始正边和负采样的负边"""
@@ -48,8 +49,8 @@ class Client:
         neg_pred = self.decoder(z[neg_edge_index[0]], z[neg_edge_index[1]])
 
         labels = torch.cat([
-            torch.full((pos_pred.size(0),), 0.9, device=self.device),
-            torch.full((neg_pred.size(0),), 0.1, device=self.device)
+            torch.full((pos_pred.size(0),), self.soft_classify, device=self.device),
+            torch.full((neg_pred.size(0),), 1 - self.soft_classify, device=self.device)
         ])
 
         pred = torch.cat([pos_pred, neg_pred], dim=0)
@@ -65,48 +66,36 @@ class Client:
         return loss.item()
 
     def train_on_augmented_positives(self):
-        """增强训练：在增强正边上训练"""
+        """增强训练：仅在增强正边上训练 (L = L_aug)"""
         if self.augmented_pos_embeddings is None:
             return 0.0
 
-        self.encoder.eval()
+        # 根据你的建议，pos增强训练时，仍保持 encoder.eval()
+        # self.encoder.eval()
         self.decoder.train()
         self.optimizer.zero_grad()
 
-        # 原始边部分
-        pos_edge_index = self.data.edge_index
-        neg_edge_index = negative_sampling(
-            edge_index=pos_edge_index,
-            num_nodes=self.data.num_nodes,
-            num_neg_samples=pos_edge_index.size(1)
-        )
-
-        z = self.encoder(self.data.x, self.data.edge_index)
-        pos_pred = self.decoder(z[pos_edge_index[0]], z[pos_edge_index[1]])
-        neg_pred = self.decoder(z[neg_edge_index[0]], z[neg_edge_index[1]])
-
-        labels = torch.cat([
-            torch.full((pos_pred.size(0),), 0.9, device=self.device),
-            torch.full((neg_pred.size(0),), 0.1, device=self.device)
-        ])
-        pred = torch.cat([pos_pred, neg_pred], dim=0)
-        loss_ori = self.criterion(pred.squeeze(), labels)
-
-        # 增强正边部分
+        # 增强正边部分 (L_aug)
         z_u_aug, z_v_aug = zip(*self.augmented_pos_embeddings)
         z_u_aug = torch.stack(z_u_aug).to(self.device)
         z_v_aug = torch.stack(z_v_aug).to(self.device)
-        pos_pred_aug = self.decoder(z_u_aug, z_v_aug)
-        labels_aug = torch.full((pos_pred_aug.size(0),), 0.9, device=self.device)
-        loss_aug = self.criterion(pos_pred_aug.squeeze(), labels_aug)
 
-        # 动态调整权重
-        current_weight = torch.sigmoid(self.pos_loss_weight)/3
-        loss = (1 - current_weight) * loss_ori + current_weight * loss_aug
+        # 使用当前 encoder 嵌入计算
+        # 注意: 如果 encoder 是 eval()，z_u_aug, z_v_aug 已经是从其他客户端注入的 detach() 嵌入，无需重新计算
+        # 保持原有逻辑，使用注入的嵌入直接进行解码器预测
+        pos_pred_aug = self.decoder(z_u_aug, z_v_aug)
+        labels_aug = torch.full((pos_pred_aug.size(0),), self.soft_classify, device=self.device)
+
+        loss_aug = self.criterion(pos_pred_aug.squeeze(), labels_aug)
+        print(f"Positive loss:{loss_aug}")
+
+        # 【修改】只使用增强损失
+        loss = self.augment_weight * loss_aug
 
         loss.backward()
+        # 移除对 pos_loss_weight 的梯度裁剪
         torch.nn.utils.clip_grad_norm_(
-            list(self.encoder.parameters()) + list(self.decoder.parameters()) + [self.pos_loss_weight],
+            list(self.encoder.parameters()) + list(self.decoder.parameters()),
             self.max_grad_norm
         )
         self.optimizer.step()
@@ -114,50 +103,32 @@ class Client:
         return loss.item()
 
     def train_on_augmented_negatives(self):
-        """增强训练：在注入的跨图负边上训练（仅训练解码器）"""
+        """增强训练：仅在注入的跨图负边上训练 (L = L_aug)"""
         if self.augmented_neg_embeddings is None:
             return 0.0
 
-        self.encoder.eval()  # 注意这里不训练编码器
+        # self.encoder.eval()
         self.decoder.train()
         self.optimizer.zero_grad()
 
-        # 原始边部分
-        pos_edge_index = self.data.edge_index
-        neg_edge_index = negative_sampling(
-            edge_index=pos_edge_index,
-            num_nodes=self.data.num_nodes,
-            num_neg_samples=pos_edge_index.size(1)
-        )
-
-        z = self.encoder(self.data.x, self.data.edge_index)
-        pos_pred = self.decoder(z[pos_edge_index[0]], z[pos_edge_index[1]])
-        neg_pred = self.decoder(z[neg_edge_index[0]], z[neg_edge_index[1]])
-
-        labels = torch.cat([
-            torch.full((pos_pred.size(0),), 0.9, device=self.device),
-            torch.full((neg_pred.size(0),), 0.1, device=self.device)
-        ])
-        pred = torch.cat([pos_pred, neg_pred], dim=0)
-
-        loss_ori = self.criterion(pred.squeeze(), labels)
-
-        # 增强负边部分
+        # 增强负边部分 (L_aug)
         z_u_aug, z_v_aug = zip(*self.augmented_neg_embeddings)
         z_u_aug = torch.stack(z_u_aug).to(self.device)
         z_v_aug = torch.stack(z_v_aug).to(self.device)
 
         neg_pred_aug = self.decoder(z_u_aug, z_v_aug)
-        labels_aug = torch.full((neg_pred_aug.size(0),), 0.1, device=self.device)
-        loss_aug = self.criterion(neg_pred_aug.squeeze(), labels_aug)
+        labels_aug = torch.full((neg_pred_aug.size(0),), 1-self.soft_classify, device=self.device)
 
-        # 动态调整权重
-        current_weight = torch.sigmoid(self.neg_loss_weight)/3
-        loss = (1 - current_weight) * loss_ori + current_weight * loss_aug
+        loss_aug = self.criterion(neg_pred_aug.squeeze(), labels_aug)
+        print(f"Negative loss:{loss_aug}")
+
+        # 【修改】只使用增强损失
+        loss = self.augment_weight * loss_aug
 
         loss.backward()
+        # 移除对 neg_loss_weight 的梯度裁剪
         torch.nn.utils.clip_grad_norm_(
-            list(self.encoder.parameters()) + list(self.decoder.parameters()) + [self.neg_loss_weight],
+            list(self.encoder.parameters()) + list(self.decoder.parameters()),
             self.max_grad_norm
         )
         self.optimizer.step()
@@ -165,6 +136,7 @@ class Client:
         return loss.item()
 
     def evaluate(self, use_test=False):
+        # ... (evaluate 方法保持不变)
         self.encoder.eval()
         self.decoder.eval()
 
@@ -202,7 +174,7 @@ class Client:
         return acc, recall, precision, f1
 
     def analyze_prediction_errors(self, cluster_labels, use_test=False, top_percent=0.3):
-        """分析误判边，用于辅助增强注入"""
+        # ... (analyze_prediction_errors 方法保持不变)
         self.encoder.eval()
         self.decoder.eval()
 
@@ -251,7 +223,7 @@ class Client:
         )
 
     def inject_augmented_positive_edges(self, edge_list, other_embeddings):
-        """注入跨图的增强正边（边嵌入形式）"""
+        # ... (inject_augmented_positive_edges 保持不变)
         if edge_list:
             self.augmented_pos_embeddings = [
                 (other_embeddings[u].detach(), other_embeddings[v].detach())
@@ -261,7 +233,7 @@ class Client:
             self.augmented_pos_embeddings = None
 
     def inject_augmented_negative_edges(self, edge_list, other_embeddings):
-        """注入跨图的增强负边（边嵌入形式）"""
+        # ... (inject_augmented_negative_edges 保持不变)
         if edge_list:
             self.augmented_neg_embeddings = [
                 (other_embeddings[u].detach(), other_embeddings[v].detach())
@@ -286,12 +258,4 @@ class Client:
     def set_decoder_state(self, state_dict):
         self.decoder.load_state_dict(state_dict)
 
-    def get_loss_weight_state(self):
-        return {
-            'pos_loss_weight': self.pos_loss_weight,
-            'neg_loss_weight': self.neg_loss_weight
-        }
-
-    def set_loss_weight_state(self, state_dict):
-        self.pos_loss_weight.data.copy_(state_dict['pos_loss_weight'].data)
-        self.neg_loss_weight.data.copy_(state_dict['neg_loss_weight'].data)
+    # 移除 get_loss_weight_state 和 set_loss_weight_state 方法
