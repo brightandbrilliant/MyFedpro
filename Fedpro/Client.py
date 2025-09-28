@@ -8,7 +8,7 @@ class Client:
     def __init__(self, client_id, data, encoder, decoder, device='cpu', lr=0.005,
                  weight_decay=1e-4, max_grad_norm=30000.0,
                  # 引入手动设定的增强损失权重
-                 augment_weight=0.1):
+                 pos_augment_weight=0.1,neg_augment_weight=0.1):
         self.client_id = client_id
         self.data = data.to(device)
         self.device = device
@@ -16,7 +16,8 @@ class Client:
         self.decoder = decoder.to(device)
 
         # 移除 loss_weight 作为可训练参数
-        self.augment_weight = augment_weight  # <--- 手动设定的增强权重
+        self.pos_augment_weight = pos_augment_weight  # <--- 手动设定的增强权重
+        self.neg_augment_weight = neg_augment_weight
 
         self.optimizer = torch.optim.Adam(
             list(self.encoder.parameters()) +
@@ -25,7 +26,6 @@ class Client:
             weight_decay=weight_decay
         )
         self.criterion = torch.nn.BCEWithLogitsLoss()
-        self.hard_neg_edges = None
         self.augmented_pos_embeddings = None
         self.augmented_neg_embeddings = None
         self.max_grad_norm = max_grad_norm
@@ -90,7 +90,7 @@ class Client:
         print(f"Positive loss:{loss_aug}")
 
         # 【修改】只使用增强损失
-        loss = self.augment_weight * loss_aug
+        loss = self.pos_augment_weight * loss_aug
 
         loss.backward()
         # 移除对 pos_loss_weight 的梯度裁剪
@@ -123,7 +123,7 @@ class Client:
         print(f"Negative loss:{loss_aug}")
 
         # 【修改】只使用增强损失
-        loss = self.augment_weight * loss_aug
+        loss = self.neg_augment_weight * loss_aug
 
         loss.backward()
         # 移除对 neg_loss_weight 的梯度裁剪

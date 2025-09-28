@@ -185,7 +185,7 @@ if __name__ == "__main__":
 
     num_rounds = 800
     top_fp_fn_percent = 0.3
-    enhance_interval = 20
+    enhance_interval = 30
     top_k_per_type = 100
     nClusters = 10
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -220,6 +220,7 @@ if __name__ == "__main__":
     rnds = [-1, -1]
     last_diff = [10000, 10000] # 设一个很大的值
     fn_fp_ignore_flags = [False, False]
+    start_rnd = 300
 
     print("\n================ Federated Training Start ================")
     for rnd in range(1, num_rounds + 1):
@@ -228,14 +229,18 @@ if __name__ == "__main__":
         z_others = [client.encoder(client.data.x, client.data.edge_index).detach() for client in clients]
 
         for i, client in enumerate(clients):
-            if fn_fp_ignore_flags[i] is False:
-                fn, fp = client.analyze_prediction_errors(cluster_labels[i], use_test=False, top_percent=top_fp_fn_percent)
+            if rnd >= start_rnd and fn_fp_ignore_flags[i] is False:
+                fn, fp = client.analyze_prediction_errors(cluster_labels[i], use_test=False,
+                                                          top_percent=top_fp_fn_percent)
                 sliding_fn_window[i].append(fn)
                 sliding_fp_window[i].append(fp)
-            else:
+            elif rnd < start_rnd:
+                # 在 FedAvg 阶段，确保 FN/FP 窗口是空的，或者不使用
+                pass
+            else:  # fn_fp_ignore_flags[i] is True
                 fn_fp_ignore_flags[i] = False
 
-            if rnd >= 150 and rnd % 5 == 0 and augment_flag[i] is False:
+            if rnd >= start_rnd and rnd % 5 == 0 and augment_flag[i] is False:
                 augment_flag[i], last_diff[i] = judge_loss_window(sliding_loss_window[i], last_diff[i])
                 if augment_flag[i] is True:
                     rnds[i] = rnd
@@ -289,6 +294,12 @@ if __name__ == "__main__":
 
         for client in clients:
             client.set_encoder_state(global_encoder_state)
+
+        if rnd < start_rnd:
+            global_decoder_state = average_state_dicts(decoder_states)
+            for client in clients:
+                client.set_decoder_state(global_decoder_state)
+            decoder_states = [client.get_decoder_state() for client in clients]
 
         avg_acc, avg_recall, avg_prec, avg_f1 = evaluate_all_clients(clients, cluster_labels, use_test=False)
 
