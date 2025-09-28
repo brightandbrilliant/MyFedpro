@@ -147,7 +147,7 @@ def construct_augmented_neg_edges(aggregated_fp, alignment, cluster_labels_j, po
 
 
 
-def evaluate_all_clients(clients, cluster_labels, use_test=False):
+def evaluate_all_clients(clients, use_test=False):
     metrics = []
     for i, client in enumerate(clients):
         acc, recall, precision, f1 = client.evaluate(use_test=use_test)
@@ -286,7 +286,7 @@ if __name__ == "__main__":
             loss_avg /= training_params['local_epochs']
             sliding_loss_window[i].append(loss_avg)
             loss_record[i].append(loss_avg)
-            print(f'Client{i} loss: {loss_avg}')
+            # print(f'Client{i} loss: {loss_avg}')
 
         encoder_states = [client.get_encoder_state() for client in clients]
         decoder_states = [client.get_decoder_state() for client in clients]
@@ -301,7 +301,7 @@ if __name__ == "__main__":
                 client.set_decoder_state(global_decoder_state)
             decoder_states = [client.get_decoder_state() for client in clients]
 
-        avg_acc, avg_recall, avg_prec, avg_f1 = evaluate_all_clients(clients, cluster_labels, use_test=False)
+        avg_acc, avg_recall, avg_prec, avg_f1 = evaluate_all_clients(clients, use_test=False)
 
         if avg_f1 > best_f1:
             best_f1 = avg_f1
@@ -315,7 +315,7 @@ if __name__ == "__main__":
         client.set_decoder_state(best_decoder_states[i])
 
     print("\n================ Final Evaluation ================")
-    evaluate_all_clients(clients, cluster_labels, use_test=True)
+    evaluate_all_clients(clients, use_test=True)
     # draw_loss_plot(loss_record[0])
     # draw_loss_plot(loss_record[1])
 
