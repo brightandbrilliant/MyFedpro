@@ -183,7 +183,7 @@ if __name__ == "__main__":
     decoder_params = {'hidden_dim': 128, 'num_layers': 8, 'dropout': 0.3}
     training_params = {'lr': 0.001, 'weight_decay': 1e-4, 'local_epochs': 5}
 
-    num_rounds = 800
+    num_rounds = 600
     top_fp_fn_percent = 0.3
     enhance_interval = 30
     top_k_per_type = 100
