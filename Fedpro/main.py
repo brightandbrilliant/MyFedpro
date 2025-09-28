@@ -218,6 +218,7 @@ if __name__ == "__main__":
     loss_record = [[],[]]
     augment_flag = [False, False]
     rnds = [-1, -1]
+    best_rnd = 0
     last_diff = [10000, 10000] # 设一个很大的值
     fn_fp_ignore_flags = [False, False]
     start_rnd = 300
@@ -307,6 +308,7 @@ if __name__ == "__main__":
             best_f1 = avg_f1
             best_encoder_state = global_encoder_state
             best_decoder_states = decoder_states
+            best_rnd = rnd
             print("===> New best model saved")
 
     print("\n================ Federated Training Finished ================")
@@ -316,6 +318,8 @@ if __name__ == "__main__":
 
     print("\n================ Final Evaluation ================")
     evaluate_all_clients(clients, use_test=True)
+    print(f"best rnd:{best_rnd}")
+    print(f"best f1:{best_f1}")
     # draw_loss_plot(loss_record[0])
     # draw_loss_plot(loss_record[1])
 
