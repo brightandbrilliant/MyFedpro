@@ -68,6 +68,7 @@ class Client:
     def train_on_augmented_positives(self):
         """增强训练：仅在增强正边上训练 (L = L_aug)"""
         if self.augmented_pos_embeddings is None:
+            print("augment error")
             return 0.0
 
         # 根据你的建议，pos增强训练时，仍保持 encoder.eval()
@@ -105,6 +106,7 @@ class Client:
     def train_on_augmented_negatives(self):
         """增强训练：仅在注入的跨图负边上训练 (L = L_aug)"""
         if self.augmented_neg_embeddings is None:
+            print("augment error")
             return 0.0
 
         # self.encoder.train()
