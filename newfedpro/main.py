@@ -233,7 +233,8 @@ if __name__ == "__main__":
     num_rounds = 600
     top_fp_fn_percent = 0.3
     enhance_interval = 30
-    top_k_per_type = 100
+    top_k_pos_per_type = 100
+    top_k_neg_per_type = 300
     nClusters = 10
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -325,7 +326,7 @@ if __name__ == "__main__":
                     aggregated_fn,
                     edge_dicts[j],
                     edge_alignment1 if i == 0 else edge_alignment2,
-                    top_k=top_k_per_type
+                    top_k=top_k_pos_per_type
                 )
 
                 neg_edge_list = construct_augmented_neg_edges(
@@ -333,7 +334,7 @@ if __name__ == "__main__":
                     edge_alignment1 if i == 0 else edge_alignment2,  # 客户端 i 到 j 的对齐矩阵
                     cluster_labels[j],  # 客户端 j 的聚类标签
                     client_pos_edges[j],  # 客户端 j 的正边集合 (用于排除)
-                    top_k=top_k_per_type
+                    top_k=top_k_neg_per_type
                 )
 
                 client.inject_augmented_positive_edges(pos_edge_list, z_others[j])
