@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.cluster import KMeans
+from sklearn.cluster import SpectralClustering
 from collections import Counter
 import numpy as np
 
@@ -181,6 +182,75 @@ def gnn_embedding_kmeans_cluster(data, encoder, n_clusters=10, device='cpu'):
     # 返回标签，并保持在 CPU 上
     return labels, inertia
 
+
+def spectral_cluster_new(features, n_clusters=10, random_state=42):
+    """
+    对输入的特征/嵌入进行谱聚类。
+    谱聚类更适合处理非凸和结构化的嵌入数据，以提高聚类稳定性。
+
+    Args:
+        features: NumPy array 或 PyTorch Tensor，形状为 [num_nodes, feature_dim]
+        n_clusters: 聚类类别数
+        random_state: 随机种子，用于保证最终 K-Means 步骤的可复现性
+
+    Returns:
+        cluster_labels: 每个节点对应的聚类类别标签 (NumPy array)
+        inertia: 聚类惯性 (由于 SpectralClustering 不直接提供，我们返回 0)
+    """
+    if isinstance(features, torch.Tensor):
+        x = features.detach().cpu().numpy()
+    else:
+        x = features
+
+    # ------------------------------------------------------------------
+    # 核心：使用 SpectralClustering
+    # n_init=10 提高鲁棒性；affinity='nearest_neighbors' 适合稀疏结构
+    # ------------------------------------------------------------------
+    # 注意：如果节点数 N 很大 (>10k-20k)，这步计算量会很大！
+    clustering = SpectralClustering(
+        n_clusters=n_clusters,
+        assign_labels='kmeans',  # 使用 K-Means 对谱嵌入进行聚类
+        random_state=random_state,
+        n_init=10,  # 对 K-Means 步骤运行 10 次
+        affinity='nearest_neighbors'  # 基于 K-近邻图构建相似度矩阵
+    )
+
+    # 谱聚类在 fit_predict 内部完成相似度矩阵计算、拉普拉斯分解和 K-Means
+    labels = clustering.fit_predict(x)
+
+    # 谱聚类不直接计算 Inertia，我们返回 0 或执行一次 K-Means 计算
+    # 为了保持函数签名一致，我们返回 0。
+    inertia = 0
+
+    return labels, inertia
+
+
+def gnn_embedding_spectral_cluster(data, encoder, n_clusters=10, device='cpu'):
+    """
+    使用 GNN 编码器生成的嵌入进行聚类。现在默认使用谱聚类。
+
+    Args:
+        data: PyG Data 对象 (包含 x 和 edge_index)
+        encoder: 预先训练或初始化的 GNN 模型
+        n_clusters: 聚类类别数
+        device: 模型和数据所在的设备
+
+    Returns:
+        cluster_labels: 每个节点对应的聚类类别标签 (NumPy array)
+        inertia: 聚类惯性 (返回 0)
+    """
+    encoder = encoder.to(device)
+    data = data.to(device)
+
+    # 1. 生成 GNN 嵌入
+    with torch.no_grad():
+        z = encoder(data.x, data.edge_index).detach()
+
+    # 2. 执行谱聚类
+    # !!! 替换了原来的 kmeans_cluster_new 调用 !!!
+    labels, inertia = spectral_cluster_new(z, n_clusters=n_clusters)
+
+    return labels, inertia
 
 
 

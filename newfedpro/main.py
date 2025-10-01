@@ -9,6 +9,7 @@ from torch_geometric.transforms import RandomLinkSplit
 from torch_geometric.utils import to_undirected
 from Cluster import (
     gnn_embedding_kmeans_cluster,
+    gnn_embedding_spectral_cluster,
     compute_anchor_embedding_differences,
     build_cluster_cooccurrence_matrix,
     extract_clear_alignments
@@ -234,7 +235,7 @@ if __name__ == "__main__":
     top_fp_fn_percent = 0.3
     enhance_interval = 30
     top_k_pos_per_type = 100
-    top_k_neg_per_type = 300
+    top_k_neg_per_type = 100
     nClusters = 10
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -253,7 +254,7 @@ if __name__ == "__main__":
     print("==================Clustering Start==================")
     # 1. 重新进行聚类，使用预训练后的编码器和新的聚类函数
     for client in clients:
-        labels, _ = gnn_embedding_kmeans_cluster(client.data, client.encoder, n_clusters=nClusters, device=device)
+        labels, _ = gnn_embedding_spectral_cluster(client.data, client.encoder, n_clusters=nClusters, device=device)
         cluster_labels.append(labels)
 
     # 2. 重新构建 edge_dicts 和对齐矩阵
