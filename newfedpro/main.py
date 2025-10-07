@@ -18,6 +18,20 @@ from Parse_Anchors import read_anchors, parse_anchors
 from Utils import (build_positive_edge_dict,
                    build_edge_type_alignment, judge_loss_window,
                    draw_loss_plot)
+import numpy as np
+
+def set_seed(seed):
+    """固定所有必要的随机种子以确保可复现性。"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        # 强制 CUDA 使用确定性算法
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
 
 
 def split_client_data(data, val_ratio=0.1, test_ratio=0.1, device='cpu'):
@@ -217,6 +231,9 @@ def pretrain_fedavg(clients, pretrain_rounds, training_params):
 
 
 if __name__ == "__main__":
+    seed_ = 826
+    set_seed(seed_)
+
     data_dir = "../Parsed_dataset/dblp"
     anchor_path = "../dataset/dblp/anchors.txt"
     pyg_data_files = sorted([os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith(".pt")])
@@ -231,7 +248,7 @@ if __name__ == "__main__":
     decoder_params = {'hidden_dim': 128, 'num_layers': 8, 'dropout': 0.3}
     training_params = {'lr': 0.001, 'weight_decay': 1e-4, 'local_epochs': 5}
 
-    num_rounds = 600
+    num_rounds = 700
     top_fp_fn_percent = 0.3
     enhance_interval = 30
     top_k_pos_per_type = 100
@@ -239,7 +256,7 @@ if __name__ == "__main__":
     nClusters = 10
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    pretrain_rounds = 30
+    pretrain_rounds = 200
 
     print("==================Pretraining Start==================")
     # Phase 1: 预训练 FedAvg
@@ -254,7 +271,7 @@ if __name__ == "__main__":
     print("==================Clustering Start==================")
     # 1. 重新进行聚类，使用预训练后的编码器和新的聚类函数
     for client in clients:
-        labels, _ = gnn_embedding_spectral_cluster(client.data, client.encoder, n_clusters=nClusters, device=device)
+        labels, _ = gnn_embedding_kmeans_cluster(client.data, client.encoder, n_clusters=nClusters, device=device)
         cluster_labels.append(labels)
 
     # 2. 重新构建 edge_dicts 和对齐矩阵
