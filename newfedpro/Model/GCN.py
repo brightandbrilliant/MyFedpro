@@ -16,9 +16,7 @@ class GCN(nn.Module):
         self.layers.append(GCNConv(hidden_dim, output_dim))
         self.dropout = dropout
 
-    def forward(self, data):
-        x = data.x
-        edge_index = data.edge_index
+    def forward(self, x, edge_index):
         for conv in self.layers[:-1]:
             x = conv(x, edge_index)
             x = F.relu(x)
