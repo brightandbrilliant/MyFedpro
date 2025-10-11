@@ -1,6 +1,8 @@
 import torch
+import torch.nn as nn # <-- 新增：导入 nn
 from torch_geometric.utils import negative_sampling
-from collections import defaultdict
+from collections import defaultdict, OrderedDict # <-- 新增：导入 OrderedDict
+from typing import List, Tuple, Any # <-- 新增：导入 typing
 import random
 
 
@@ -10,26 +12,71 @@ class Client:
                  # 引入手动设定的增强损失权重
                  pos_augment_weight=0.1,neg_augment_weight=0.1):
         self.client_id = client_id
-        self.data = data.to(device)
+        # 注意：这里先不急着 to(device)，留给 to() 方法处理
+        self.data = data
         self.device = device
-        self.encoder = encoder.to(device)
-        self.decoder = decoder.to(device)
+        self.encoder = encoder
+        self.decoder = decoder
 
-        # 移除 loss_weight 作为可训练参数
-        self.pos_augment_weight = pos_augment_weight  # <--- 手动设定的增强权重
+        self.pos_augment_weight = pos_augment_weight
         self.neg_augment_weight = neg_augment_weight
 
-        self.optimizer = torch.optim.Adam(
-            list(self.encoder.parameters()) +
-            list(self.decoder.parameters()),
-            lr=lr,
-            weight_decay=weight_decay
-        )
+        # 优化器必须在模型包装前初始化，否则参数数量会出错
+        # 优化器必须在模型包装前初始化，然后 to() 方法中重新初始化（更安全）
+        self.optimizer_params = {
+            'lr': lr,
+            'weight_decay': weight_decay
+        }
+
+        # 优化器将在 to() 方法中，在模型迁移/包装后，根据最终参数重新初始化
+        self.optimizer = None
+
         self.criterion = torch.nn.BCEWithLogitsLoss()
         self.augmented_pos_embeddings = None
         self.augmented_neg_embeddings = None
         self.max_grad_norm = max_grad_norm
         self.soft_classify = 1.0
+
+        # 【新增属性】用于标记是否使用了 DataParallel
+        self.is_dp = True
+
+    # 【核心修改 1：to() 方法实现多 GPU 包装和设备迁移】
+    def to(self, devices: List[torch.device] = None) -> 'Client':
+        """
+        将模型和数据迁移到指定设备列表。如果设备数 > 1，则使用 nn.DataParallel。
+        """
+        if devices is None or not devices:
+            self.device = torch.device('cpu')
+            devices = [self.device]
+
+        self.device = devices[0] # 主设备 (用于数据和聚合)
+
+        # 1. 检查是否需要使用 DataParallel
+        if len(devices) > 1 and all(d.type == 'cuda' for d in devices):
+            print(f"Client {self.client_id} 启用 DataParallel，使用设备: {devices}")
+            self.encoder = nn.DataParallel(self.encoder.to(self.device), device_ids=devices, output_device=self.device)
+            self.decoder = nn.DataParallel(self.decoder.to(self.device), device_ids=devices, output_device=self.device)
+            self.is_dp = True
+        else:
+            # 只有一块 GPU 或 CPU
+            self.encoder.to(self.device)
+            self.decoder.to(self.device)
+            self.is_dp = False
+
+        # 2. 迁移数据到主设备
+        self.data.to(self.device)
+
+        # 3. 重新初始化优化器 (确保参数在正确设备/包装上)
+        self.optimizer = torch.optim.Adam(
+            list(self.encoder.parameters()) +
+            list(self.decoder.parameters()),
+            **self.optimizer_params
+        )
+
+        # 4. 迁移已存在的增强嵌入 (如果它们在调用 to() 时已存在)
+        self.clear_augmented_edges()
+
+        return self
 
     def train(self):
         """常规训练：只使用原始正边和负采样的负边"""
@@ -249,15 +296,46 @@ class Client:
         self.augmented_neg_embeddings = None
 
     def get_encoder_state(self):
-        return self.encoder.state_dict()
+        state_dict = self.encoder.state_dict()
+        if self.is_dp:
+            # 剥离 'module.' 前缀，以供 FedAvg 聚合
+            new_state_dict = OrderedDict()
+            for k, v in state_dict.items():
+                name = k[7:] # 移除 'module.'
+                new_state_dict[name] = v.cpu() # 移到 CPU 以便安全聚合
+            return new_state_dict
+        else:
+            return state_dict
 
     def get_decoder_state(self):
-        return self.decoder.state_dict()
+        state_dict = self.decoder.state_dict()
+        if self.is_dp:
+            # 剥离 'module.' 前缀
+            new_state_dict = OrderedDict()
+            for k, v in state_dict.items():
+                name = k[7:]
+                new_state_dict[name] = v.cpu()
+            return new_state_dict
+        else:
+            return state_dict
 
+    # 【核心修改 3：处理 DP 的状态字典导入】
     def set_encoder_state(self, state_dict):
-        self.encoder.load_state_dict(state_dict)
+        if self.is_dp:
+            # 如果模型是 DP 包装的，添加 'module.' 前缀
+            new_state_dict = OrderedDict()
+            for k, v in state_dict.items():
+                # 确保状态字典的值在正确的设备上
+                new_state_dict['module.' + k] = v.to(self.device)
+            self.encoder.load_state_dict(new_state_dict, strict=True)
+        else:
+            self.encoder.load_state_dict(state_dict)
 
     def set_decoder_state(self, state_dict):
-        self.decoder.load_state_dict(state_dict)
-
-    # 移除 get_loss_weight_state 和 set_loss_weight_state 方法
+        if self.is_dp:
+            new_state_dict = OrderedDict()
+            for k, v in state_dict.items():
+                new_state_dict['module.' + k] = v.to(self.device)
+            self.decoder.load_state_dict(new_state_dict, strict=True)
+        else:
+            self.decoder.load_state_dict(state_dict)

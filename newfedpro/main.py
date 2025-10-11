@@ -60,17 +60,7 @@ def split_client_data(data, val_ratio=0.1, test_ratio=0.1, device='cpu'):
 def load_all_clients(pyg_data_paths, encoder_params, decoder_params, training_params, device):
     """
     加载所有客户端及其数据和模型。
-
-    Args:
-        pyg_data_paths (list): PyG Data 文件路径列表。
-        encoder_params (dict): 编码器模型参数。
-        decoder_params (dict): 解码器模型参数。
-        training_params (dict): 训练参数 (用于初始化 Client)。
-        device (torch.device): 设备。
-
-    Returns:
-        clients (list): Client 对象列表。
-        raw_data_list (list): 原始 PyG Data 对象列表。
+    注意：这里的 device 是主设备（例如 cuda:0），用于初始数据加载。
     """
     clients, raw_data_list = [], []
 
@@ -78,6 +68,7 @@ def load_all_clients(pyg_data_paths, encoder_params, decoder_params, training_pa
         raw_data = torch.load(path)
         raw_data_list.append(raw_data)
 
+        # 1. 使用主设备加载数据
         data = split_client_data(raw_data, device=device)
 
         encoder = GraphSAGE(**encoder_params)
@@ -88,7 +79,7 @@ def load_all_clients(pyg_data_paths, encoder_params, decoder_params, training_pa
             data=data,
             encoder=encoder,
             decoder=decoder,
-            device=device,
+            device=device,  # <--- 传递主设备，用于 Client 初始化
             lr=training_params['lr'],
             weight_decay=training_params['weight_decay']
         )
@@ -283,6 +274,19 @@ if __name__ == "__main__":
     seed_ = 826
     set_seed(seed_)
 
+    if torch.cuda.is_available():
+        num_gpus = torch.cuda.device_count()
+        target_gpus = min(4, num_gpus)  # 使用最多 4 块 GPU
+        # 创建设备列表 [cuda:0, cuda:1, cuda:2, ...]
+        target_devices = [torch.device(f'cuda:{i}') for i in range(target_gpus)]
+        print(f"检测到 {num_gpus} 块 GPU, 启用 {target_gpus} 块进行单任务加速.")
+    else:
+        target_devices = [torch.device('cpu')]
+        print("未检测到 GPU，使用 CPU 运行.")
+
+        # 主设备 (用于初始化 PyG 数据)
+    initial_device = target_devices[0]
+
     data_dir = "../Parsed_dataset/dblp"
     anchor_path = "../dataset/dblp/anchors.txt"
     pyg_data_files = sorted([os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith(".pt")])
@@ -312,6 +316,9 @@ if __name__ == "__main__":
     clients, raw_data_list = load_all_clients(
         pyg_data_files, encoder_params, decoder_params, training_params, device
     )
+
+    for client in clients:
+        client.to(target_devices)
 
     pretrain_fedavg(clients, pretrain_rounds, training_params)
 
