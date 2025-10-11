@@ -307,14 +307,14 @@ if __name__ == "__main__":
     top_k_pos_per_type = 200
     top_k_neg_per_type = 200
     nClusters = 10
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     pretrain_rounds = 200
 
     print("==================Pretraining Start==================")
     # Phase 1: 预训练 FedAvg
     clients, raw_data_list = load_all_clients(
-        pyg_data_files, encoder_params, decoder_params, training_params, device
+        pyg_data_files, encoder_params, decoder_params, training_params, initial_device
     )
 
     for client in clients:
@@ -327,7 +327,8 @@ if __name__ == "__main__":
     print("==================Clustering Start==================")
     # 1. 重新进行聚类，使用预训练后的编码器和新的聚类函数
     for client in clients:
-        labels, _ = gnn_embedding_kmeans_cluster(client.data, client.encoder, n_clusters=nClusters, device=device)
+        labels, _ = gnn_embedding_kmeans_cluster(client.data, client.encoder,
+                                                 n_clusters=nClusters, device=initial_device)
         cluster_labels.append(labels)
 
     # 2. 重新构建 edge_dicts 和对齐矩阵
@@ -342,7 +343,7 @@ if __name__ == "__main__":
 
     z1 = clients[0].encoder(clients[0].data.x, clients[0].data.edge_index).detach()
     z2 = clients[1].encoder(clients[1].data.x, clients[1].data.edge_index).detach()
-    results = compute_anchor_embedding_differences(z1, z2, anchor_pairs, device=device)
+    results = compute_anchor_embedding_differences(z1, z2, anchor_pairs, device=initial_device)
 
     print("==================Alignment Start==================")
     co_matrix = build_cluster_cooccurrence_matrix(cluster_labels[0], cluster_labels[1], results, nClusters,
