@@ -114,7 +114,55 @@ def extract_augmented_pos_edges(target_fn_types, edge_dict, edge_alignment, top_
     return selected_edges
 
 
-def construct_augmented_neg_edges(aggregated_fp, alignment, cluster_labels_j, pos_edges_j, top_k=100):
+def judge_hard_negative_edges(client_j, u, v, threshold=0.5):
+    """
+        判断边 (u, v) 是否是客户端 j 视角下的困难负样本。
+
+        Args:
+            client_j: 知识提供方客户端 j 的对象（包含 encoder, decoder, data）。
+            u, v: 待评估节点的全局索引。
+            threshold: 困难负样本的概率阈值 P(边=1) > threshold。
+                       threshold=0.5 意味着模型 j 预测 logit > 0。
+
+        Returns:
+            bool: True 如果是困难负样本。
+        """
+    # 确保模型处于评估模式，并关闭梯度追踪
+    client_j.encoder.eval()
+    client_j.decoder.eval()
+    device = client_j.device  # 假设 client_j 有一个 device 属性
+
+    u_tensor = torch.tensor(u, device=device)
+    v_tensor = torch.tensor(v, device=device)
+
+    with torch.no_grad():
+        # 1. 获取客户端 j 的完整嵌入
+        # 假设 client_j 的 encoder 接口是 (x, edge_index)
+        z_j = client_j.encoder(client_j.data.x, client_j.data.edge_index)
+
+        # 2. 提取 u 和 v 的嵌入
+        # 注意：u, v 是在 client_j 数据集中的索引
+        z_u = z_j[u_tensor]
+        z_v = z_j[v_tensor]
+
+        # 3. 计算 Logit
+        # 需要 unsqueeze(0) 以满足 decoder 的 (Batch, Dim) 输入格式
+        logit = client_j.decoder(z_u.unsqueeze(0), z_v.unsqueeze(0)).squeeze()
+
+        # 4. 困难度筛选逻辑
+        if threshold == 0.5:
+            logit_threshold = 0.0
+        else:
+            logit_threshold = torch.log(torch.tensor(threshold / (1.0 - threshold)))
+
+        # 如果 logit > 阈值，意味着 P(edge) > threshold，模型 j 认为这可能是条边 (难以判断)
+        if logit.item() > logit_threshold:
+            return True
+        else:
+            return False
+
+
+def construct_augmented_neg_edges(aggregated_fp, alignment, cluster_labels_j, pos_edges_j, client_j, top_k=100):
     """
     基于类型对齐和负属性保证，构造增强负边列表，并确保无重复。
     ...
@@ -153,7 +201,8 @@ def construct_augmented_neg_edges(aggregated_fp, alignment, cluster_labels_j, po
                 # 3. edge_tuple 不在本次已采样的集合中（排除重复）
                 if (u != v and
                         edge_tuple not in pos_edges_j and  # <--- 修正：不再检查 (v, u)
-                        edge_tuple not in sampled_neg_edges):
+                        edge_tuple not in sampled_neg_edges and
+                        judge_hard_negative_edges(client_j, u, v) is True):
                     neg_edge_list.append(edge_tuple)
                     sampled_neg_edges.add(edge_tuple)
                     sampled_count += 1
@@ -352,6 +401,7 @@ if __name__ == "__main__":
                     edge_alignment1 if i == 0 else edge_alignment2,  # 客户端 i 到 j 的对齐矩阵
                     cluster_labels[j],  # 客户端 j 的聚类标签
                     client_pos_edges[j],  # 客户端 j 的正边集合 (用于排除)
+                    clients[j],
                     top_k=top_k_neg_per_type
                 )
 
