@@ -110,7 +110,7 @@ def extract_augmented_pos_edges(target_fn_types, edge_dict, edge_alignment, top_
         aligned_targets = edge_alignment.get((c1, c2), [])
         for (c1_p, c2_p), weight in aligned_targets:
             candidate_edges = edge_dict.get((c1_p, c2_p), [])
-            selected_edges.extend(candidate_edges[:top_k])
+            selected_edges.extend(candidate_edges[:int(top_k * weight)])
     return selected_edges
 
 
