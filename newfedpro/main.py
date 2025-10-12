@@ -103,14 +103,58 @@ def average_state_dicts(state_dicts):
         avg_state[key] = torch.stack([sd[key] for sd in state_dicts], dim=0).mean(dim=0)
     return avg_state
 
+def judge_high_confidence_positive(client_j, u, v, logit_threshold=5.0):
+    """
+        判断边 (u, v) 是否是客户端 j 视角下的高置信度正样本。
 
-def extract_augmented_pos_edges(target_fn_types, edge_dict, edge_alignment, top_k=100):
+        Args:
+            client_j: 知识提供方客户端 j 的对象。
+            u, v: 待评估节点的全局索引。
+            logit_threshold: Logit 阈值，例如 5.0 对应 P(edge) ≈ 0.993。
+
+        Returns:
+            bool: True 如果是高置信度正样本。
+        """
+    client_j.encoder.eval()
+    client_j.decoder.eval()
+    device = client_j.device
+
+    u_tensor = torch.tensor(u, device=device)
+    v_tensor = torch.tensor(v, device=device)
+
+    with torch.no_grad():
+        z_j = client_j.encoder(client_j.data.x, client_j.data.edge_index)
+
+        z_u = z_j[u_tensor]
+        z_v = z_j[v_tensor]
+
+        # 计算 Logit
+        logit = client_j.decoder(z_u.unsqueeze(0), z_v.unsqueeze(0)).squeeze()
+
+        if logit.item() > logit_threshold:
+            return True
+        else:
+            return False
+
+
+def extract_augmented_pos_edges(target_fn_types, edge_dict, edge_alignment, client_j, top_k=100):
     selected_edges = []
     for (c1, c2) in target_fn_types:
         aligned_targets = edge_alignment.get((c1, c2), [])
         for (c1_p, c2_p), weight in aligned_targets:
             candidate_edges = edge_dict.get((c1_p, c2_p), [])
-            selected_edges.extend(candidate_edges[:int(top_k * weight)])
+            random.shuffle(candidate_edges)
+            target_samples = int(top_k * weight)
+            count = 0
+            for u, v in candidate_edges:
+                if count >= target_samples:
+                    break
+
+                # 使用 Client j 的模型进行过滤
+                if judge_high_confidence_positive(client_j, u, v):
+                    selected_edges.append((u, v))
+                    count += 1
+    print(f"Positive edge count:{count}")
     return selected_edges
 
 
@@ -393,6 +437,7 @@ if __name__ == "__main__":
                     aggregated_fn,
                     edge_dicts[j],
                     edge_alignment1 if i == 0 else edge_alignment2,
+                    client_j=clients[j],
                     top_k=top_k_pos_per_type
                 )
 
